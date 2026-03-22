@@ -1,0 +1,1805 @@
+# ============================================================
+# NiveshNarrator — Cursor Rules  (v2 — audited & gap-fixed)
+# Automated Indian Retirement Planning Video Pipeline
+# ============================================================
+# These rules are authoritative for EVERY file in this repo.
+# Follow them exactly. Never debate or reinterpret them.
+# ============================================================
+
+## PROJECT OVERVIEW
+
+NiveshNarrator generates original retirement planning videos for Indian
+white-collar professionals (age 35–50).
+  NiveshNarrator = Nivesh (investment, Hindi) + Narrator (AI voiceover)
+
+Every video is 100% original — generated persona, deterministic math,
+Hinglish script via Claude Sonnet, ElevenLabs voiceover, FFmpeg video,
+YouTube long-form + Instagram Reels upload.
+
+Pipeline stages (strict order):
+  GENERATE → CALCULATE → WRITE → REVIEW (human gate) → PRODUCE → PUBLISH → FEEDBACK
+
+Revenue: YouTube AdSense Education CPM ₹300–420 + fintech brand deals + affiliate.
+Target: 1,000+ unique video scenarios before parameter exhaustion.
+Post-exhaustion: new series (salary slip, tax optimisation, home loan prepayment).
+
+---
+
+## DIRECTORY STRUCTURE  (canonical — never deviate)
+
+```
+NiveshNarrator/
+├── .cursorrules
+├── .env                              # secrets — NEVER commit
+├── .env.example                      # template — committed, safe
+├── .gitignore                        # see GITIGNORE section below
+├── ARCHITECTURE_SPEC.md
+├── CLAUDE_PROJECT_INSTRUCTIONS.md
+├── main.py                           # CLI entry point
+├── config.py                         # pydantic-settings Settings class
+├── requirements.txt                  # see REQUIREMENTS section below
+│
+├── core/
+│   ├── __init__.py
+│   ├── logger.py                     # get_logger() — imported first in every module
+│   ├── database.py                   # ContentRecord, RunLog, get_db(), ContentStatus
+│   ├── exceptions.py                 # RetireBotError + all subclasses
+│   ├── models.py                     # PersonaData, RetirementMath, OverlaySpec TypedDicts
+│   └── utils.py                      # format_inr, persona_hash, similarity
+│
+├── pipeline/
+│   ├── __init__.py
+│   ├── orchestrator.py               # run_cycle() + run_pending()
+│   │
+│   ├── generate/
+│   │   ├── __init__.py
+│   │   ├── persona.py
+│   │   ├── names.py
+│   │   └── deduplicator.py
+│   │
+│   ├── calculate/                    # ── PURE PYTHON ONLY — ZERO EXTERNAL CALLS ──
+│   │   ├── __init__.py
+│   │   ├── take_home.py
+│   │   ├── corpus.py
+│   │   ├── epf.py
+│   │   ├── nps.py
+│   │   ├── savings_growth.py
+│   │   ├── sip.py
+│   │   ├── pension.py
+│   │   └── validator.py
+│   │
+│   ├── write/
+│   │   ├── __init__.py
+│   │   ├── scriptwriter.py
+│   │   ├── script_validator.py
+│   │   ├── hook_validator.py
+│   │   ├── shorts_writer.py
+│   │   └── title_generator.py
+│   │
+│   ├── review/
+│   │   ├── __init__.py
+│   │   ├── actions.py                # ALL business logic — never in dashboard.py
+│   │   └── dashboard.py              # Streamlit UI shell only
+│   │
+│   ├── produce/
+│   │   ├── __init__.py
+│   │   ├── tts.py                    # ElevenLabs long-form voiceover
+│   │   ├── tts_shorts.py             # ElevenLabs Shorts voiceover
+│   │   ├── charts.py                 # matplotlib corpus bar chart → 1080×540 PNG
+│   │   ├── chart_validator.py        # PNG dimension + non-blank check
+│   │   ├── overlays.py               # Whisper timestamps → OverlaySpec list
+│   │   ├── title_card.py             # Pillow → 1080×960 PNG  (top video panel)
+│   │   ├── thumbnail.py              # Pillow → 1280×720 JPG  (YouTube preview)
+│   │   ├── composer.py               # FFmpeg long-form 1080×1920 mp4
+│   │   ├── shorts_composer.py        # FFmpeg Shorts ≤58s 1080×1920 mp4
+│   │   └── branding.py               # FFmpeg concat intro+main+outro
+│   │
+│   └── publish/
+│       ├── __init__.py
+│       ├── formatter.py              # YouTube metadata + chapter markers + affiliate
+│       ├── uploader.py               # YouTube API + Instagram Graph API
+│       └── retry.py                  # @with_retry exponential backoff decorator
+│
+├── feedback/
+│   ├── __init__.py
+│   └── analytics.py                  # YouTube Analytics → ContentRecord daily sync
+│
+├── storage/
+│   ├── __init__.py
+│   ├── s3.py                         # boto3 upload + presign
+│   ├── cleanup.py                    # purge temp/{content_id}_* after pipeline
+│   └── db_logger.py                  # structured pipeline event log to DB
+│
+├── monitoring/
+│   ├── __init__.py
+│   ├── sentry.py                     # Sentry DSN init + capture_exception wrapper
+│   ├── metrics.py                    # simple counters: videos_generated, uploads_ok
+│   └── health.py                     # /health endpoint — checks DB + S3 reachability
+│
+├── scripts/
+│   ├── recalculate_math.py           # bulk recalc after rate change
+│   └── export_analytics.py           # dump ContentRecord performance to CSV
+│
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py                   # mock_settings, sample_persona fixtures
+│   └── fixtures/
+│       └── math_golden.json          # 10 verified persona+math pairs — NEVER delete
+│
+├── logs/                             # auto-created by logger.py on first run
+│   ├── niveshnarrator.log            # master log — all stages
+│   ├── calculate.log
+│   ├── write.log                     # full system prompt logged here for SEBI audit
+│   ├── produce.log
+│   └── publish.log
+│
+└── assets/
+    ├── sebi/
+    │   ├── sebi_disclaimer_full.txt  # verbatim disclaimer — long-form
+    │   └── sebi_disclaimer_short.txt # ≤35-word version — Shorts
+    ├── fonts/
+    │   ├── NotoSans-Bold.ttf
+    │   └── NotoSans-Regular.ttf
+    ├── branding/
+    │   ├── intro.mp4                 # 5s channel name animation, 1080×1920
+    │   ├── outro.mp4                 # 30s subscribe CTA, 1080×1920
+    │   └── logo.png                  # 200×200 transparent PNG
+    └── music/                        # royalty-free MP3s (pixabay) — optional
+```
+
+---
+
+## GITIGNORE  (required — create before first commit)
+
+```
+.env
+youtube_token.json
+logs/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.db
+*.db-shm
+*.db-wal
+/temp/
+/tmp/niveshnarrator/
+```
+
+---
+
+## REQUIREMENTS.TXT  (install all before any stage)
+
+```
+# Core
+anthropic>=0.25.0
+pydantic-settings>=2.0.0
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+
+# Media
+elevenlabs>=1.0.0
+openai>=1.0.0              # Whisper word timestamps
+matplotlib>=3.8.0
+pillow>=10.0.0
+
+# Video
+# ffmpeg: install via system package manager (apt/brew) — NOT via pip
+
+# Publish
+google-api-python-client>=2.0.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.0.0
+boto3>=1.34.0
+requests>=2.31.0
+
+# Review dashboard
+streamlit>=1.32.0
+
+# Monitoring
+sentry-sdk>=1.40.0
+
+# Testing
+pytest>=8.0.0
+pytest-mock>=3.12.0
+
+# Utilities
+python-dotenv>=1.0.0
+```
+
+---
+
+## PYTHON CODING STANDARDS  (every single file, no exceptions)
+
+```python
+# ── Module template ──────────────────────────────────────────
+from core.logger import get_logger          # import 1
+logger = get_logger(__name__)               # line 2 — ALWAYS before any logic
+
+# ── Logging ── every message must carry content_id ───────────
+logger.info(f"[{content_id}] Starting corpus calculation")
+logger.warning(f"[{content_id}] EPF employer cap applied at ₹1800")
+logger.error(f"[{content_id}] SEBI check 2 failed — halting")
+
+# Never use print() — always logger
+
+# ── Type hints — full, on every parameter and return ─────────
+def calculate_corpus(
+    persona: PersonaData,
+    settings: Settings,
+) -> RetirementMath:
+
+# ── File paths — pathlib only, never raw strings ─────────────
+output_path: Path = settings.TEMP_DIR / f"{content_id}_chart.png"
+
+# ── Database — always context manager ────────────────────────
+with get_db() as db:
+    record = db.query(ContentRecord).filter_by(content_id=content_id).first()
+
+# ── External API calls — try/except with project exceptions ──
+try:
+    response = elevenlabs_client.generate(text=script, voice=voice_id)
+except Exception as e:
+    raise TTSError(f"[{content_id}] ElevenLabs failed: {e}") from e
+
+# ── Subprocess (FFmpeg) ───────────────────────────────────────
+result = subprocess.run(
+    ["ffmpeg", "-i", str(input_path), "-c:v", "libx264", str(output_path)],
+    capture_output=True,
+    text=True,
+)
+if result.returncode != 0:
+    raise ComposerError(f"[{content_id}] FFmpeg failed:\n{result.stderr}")
+
+# ── Temp file cleanup — always in finally ────────────────────
+try:
+    produce_video()
+finally:
+    temp_audio.unlink(missing_ok=True)
+    temp_chart.unlink(missing_ok=True)
+
+# ── Settings — never hardcode rates, limits, or paths ────────
+# WRONG:  if monthly_sip < 500:
+# RIGHT:  if monthly_sip < settings.SIP_FLOOR:
+
+# ── Python version features ───────────────────────────────────
+# Python 3.11+ — use match/case, X | Y union types, built-in Path
+match job_type:
+    case "psu_post2004":
+        nps_corpus = calculate_nps(persona, settings)
+    case "psu_pre2004":
+        pension = calculate_pension(persona, settings)
+    case _:
+        pass   # private sector — EPF only
+```
+
+---
+
+## STAGE 0 — SCAFFOLD  (do this first, before any logic)
+
+**Goal:** Zero syntax errors. Every module importable. No logic yet.
+
+Checklist:
+- `__init__.py` in: `core/`, `pipeline/`, every pipeline sub-package,
+  `feedback/`, `storage/`, `monitoring/`, `tests/`
+- `core/exceptions.py` — define `RetireBotError` base + ALL subclasses:
+  - `PersonaExhaustedError`
+  - `PersonaNearDuplicateError`
+  - `MathValidationError`
+  - `DisclaimerMissingError`
+  - `TTSError`
+  - `ComposerError`
+  - `UploadError`
+  - `NumberAccuracyError`
+  - `OutputValidationError`
+  - `ChartValidationError`
+- `logs/` directory — created by `core/logger.py` on first import via `mkdir(parents=True, exist_ok=True)`
+- `assets/sebi/` — create both disclaimer files with correct text (see SEBI section)
+- Verify: `python -c "import pipeline.calculate; print('OK')"` — must print OK
+
+---
+
+## STAGE 1 — CORE INFRASTRUCTURE
+
+Build in this exact order:
+
+### core/exceptions.py
+```python
+class RetireBotError(Exception):
+    """Base exception — all pipeline errors inherit from this."""
+
+class PersonaExhaustedError(RetireBotError): ...
+class PersonaNearDuplicateError(RetireBotError): ...
+class MathValidationError(RetireBotError): ...
+class DisclaimerMissingError(RetireBotError): ...
+class TTSError(RetireBotError): ...
+class ComposerError(RetireBotError): ...
+class UploadError(RetireBotError): ...
+class NumberAccuracyError(RetireBotError): ...
+class OutputValidationError(RetireBotError): ...
+class ChartValidationError(RetireBotError): ...
+```
+
+### core/logger.py
+```python
+import logging, json
+from pathlib import Path
+
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+def get_logger(name: str) -> logging.Logger:
+    # JSON-formatted handler to logs/niveshnarrator.log
+    # Stage-specific handler: e.g. "pipeline.calculate" → logs/calculate.log
+    # StreamHandler for terminal (level=INFO in production, DEBUG in development)
+```
+
+### core/models.py  (TypedDicts — no Pydantic here, keep it simple)
+```python
+from typing import TypedDict
+
+class PersonaData(TypedDict):
+    content_id: str          # UUIDv4 string — generated in persona.py
+    first_name: str
+    last_name: str
+    age: int                 # 35–50
+    city: str
+    job_type: str            # see job_type values in STAGE 3
+    monthly_ctc: int         # ₹ CTC per month
+    monthly_basic: int       # CTC × 0.40
+    existing_savings: int    # liquid savings at generation time
+    monthly_expenses: int    # current monthly spend
+    years_experience: int    # 5–25
+    years_to_retirement: int # RETIREMENT_AGE − age
+
+class RetirementMath(TypedDict):
+    content_id: str
+    monthly_take_home: int
+    annual_take_home: int
+    employee_epf_monthly: int
+    employer_epf_monthly: int
+    epf_corpus: int
+    nps_corpus: int           # 0 for non-PSU job types
+    monthly_pension: int      # 0 for non-pre2004-PSU job types
+    grown_savings: int
+    target_corpus: int
+    monthly_sip: int
+    instrument_split: dict    # must contain both _pct and _monthly_inr keys
+    sebi_disclaimer: str      # injected by validator.py (SEBI Check 1)
+
+class OverlaySpec(TypedDict):
+    timestamp_start: float   # seconds into audio
+    timestamp_end: float
+    context_phrase: str      # spoken phrase matched via SequenceMatcher
+    display_text: str        # ₹-formatted figure to show on screen
+```
+
+### core/utils.py
+```python
+def format_inr(amount: int) -> str:
+    """Format integer as Indian numbering: 1,23,456 or ₹1.2 Cr."""
+
+def persona_hash(persona: PersonaData) -> str:
+    """SHA-256 of sorted key params — for exact dedup check."""
+
+def similarity(a: PersonaData, b: PersonaData) -> float:
+    """Weighted SequenceMatcher score across age, ctc, city, job_type."""
+
+def words_to_inr_phrase(amount: int) -> str:
+    """31400 → 'thirty-one thousand four hundred' — for overlay matching."""
+```
+
+### config.py  (pydantic-settings)
+```python
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    # API keys
+    ANTHROPIC_API_KEY: str
+    ELEVENLABS_API_KEY: str
+    ELEVENLABS_VOICE_ID: str
+    OPENAI_API_KEY: str
+    YOUTUBE_API_KEY: str
+    YOUTUBE_CHANNEL_ID: str
+    AWS_ACCESS_KEY_ID: str
+    AWS_SECRET_ACCESS_KEY: str
+    AWS_S3_BUCKET: str = "retirebot-outputs"
+    AWS_REGION: str = "ap-south-1"
+    INSTAGRAM_ACCESS_TOKEN: str
+    INSTAGRAM_BUSINESS_ACCOUNT_ID: str
+
+    # Financial rates — update from .env, never hardcode
+    EPF_RATE: float = 0.0825
+    PPF_RATE: float = 0.071
+    NPS_EQUITY_RATE: float = 0.12
+    NPS_DEBT_RATE: float = 0.075
+    INFLATION_RATE: float = 0.06
+    SAFE_WITHDRAWAL_RATE: float = 0.033   # NEVER change to 0.04
+    EQUITY_MF_RATE: float = 0.12
+    STANDARD_DEDUCTION: int = 75000
+    RETIREMENT_AGE: int = 60              # NEVER change
+
+    # Pipeline thresholds
+    NEAR_DUPLICATE_THRESHOLD: float = 0.85
+    SEBI_DISCLAIMER_PHRASE: str
+    SIP_FLOOR: int = 500
+    SIP_CEILING: int = 200000
+
+    # App
+    APP_ENV: str = "development"
+    TEMP_DIR: Path = Path("/tmp/niveshnarrator")
+    DATABASE_URL: str = "sqlite:///./niveshnarrator.db"
+
+    class Config:
+        env_file = ".env"
+```
+
+### core/database.py
+```python
+# ContentStatus enum — enforce in orchestrator state machine
+class ContentStatus(str, Enum):
+    PERSONA_GENERATED = "persona_generated"
+    MATH_CALCULATED   = "math_calculated"
+    MATH_VALIDATED    = "math_validated"
+    SCRIPT_GENERATED  = "script_generated"
+    SCRIPT_VALIDATED  = "script_validated"
+    PENDING_REVIEW    = "pending_review"
+    APPROVED          = "approved"
+    REJECTED_REVIEW   = "rejected_review"
+    SHORTS_WRITTEN    = "shorts_written"
+    PRODUCED          = "produced"
+    UPLOADED          = "uploaded"
+    FAILED            = "failed"
+
+# ContentRecord — main pipeline table
+class ContentRecord(Base):
+    __tablename__ = "content_records"
+    content_id            = Column(String, primary_key=True)    # UUIDv4
+    persona_hash          = Column(String, index=True)
+    status                = Column(Enum(ContentStatus))
+    sebi_check_1_passed   = Column(Boolean, default=False)
+    sebi_check_2_passed   = Column(Boolean, default=False)
+    regeneration_count    = Column(Integer, default=0)
+    reject_reason         = Column(String, nullable=True)
+    persona_json          = Column(JSON)
+    math_json             = Column(JSON)
+    script_text           = Column(Text, nullable=True)
+    shorts_script_text    = Column(Text, nullable=True)
+    yt_video_id           = Column(String, nullable=True)
+    ig_media_id           = Column(String, nullable=True)
+    yt_views              = Column(Integer, default=0)
+    yt_ctr                = Column(Float, default=0.0)
+    yt_avg_watch_pct      = Column(Float, default=0.0)
+    created_at            = Column(DateTime, default=func.now())
+    updated_at            = Column(DateTime, default=func.now(), onupdate=func.now())
+
+# RunLog — one row per pipeline run (for ops visibility)
+class RunLog(Base):
+    __tablename__ = "run_logs"
+    run_id      = Column(String, primary_key=True)   # UUIDv4
+    run_type    = Column(String)                      # "cycle" | "pending" | "manual"
+    started_at  = Column(DateTime)
+    finished_at = Column(DateTime, nullable=True)
+    status      = Column(String)                      # "ok" | "partial" | "failed"
+    content_ids = Column(JSON)                        # list of content_ids processed
+    error       = Column(Text, nullable=True)
+
+# get_db() — always use as context manager
+@contextmanager
+def get_db() -> Generator[Session, None, None]:
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+```
+
+Test gate: `pytest tests/test_core.py -v` — must be green before Stage 2.
+
+---
+
+## STAGE 2 — MATH ENGINE  (most critical — pure Python only)
+
+### ABSOLUTE RULES for pipeline/calculate/
+- **ZERO external calls** — no HTTP, no Claude, no ElevenLabs, no subprocess, no sockets
+- **Pure Python** — stdlib + math only. No third-party packages.
+- **Deterministic** — same inputs always produce identical outputs
+- Any external call in this package is a critical architecture bug
+
+### Financial constants  (always read from `settings`, NEVER hardcode)
+
+| settings field         | Value   | Source              | When to update      |
+|------------------------|---------|---------------------|---------------------|
+| EPF_RATE               | 0.0825  | EPFO annual circular | Feb–Mar each year  |
+| PPF_RATE               | 0.071   | Finance Ministry    | Quarterly           |
+| NPS_EQUITY_RATE        | 0.12    | Historical NIFTY avg| Annually            |
+| NPS_DEBT_RATE          | 0.075   | Historical avg      | Annually            |
+| INFLATION_RATE         | 0.06    | India CPI long-term | Every 2–3 years     |
+| SAFE_WITHDRAWAL_RATE   | 0.033   | India-adjusted      | Every 2–3 years     |
+| EQUITY_MF_RATE         | 0.12    | NIFTY historical avg| Annually            |
+| STANDARD_DEDUCTION     | 75000   | FY26 Budget         | Every February      |
+| RETIREMENT_AGE         | 60      | Fixed               | Never               |
+
+### SAFE_WITHDRAWAL_RATE = 0.033 — NEVER 0.04
+India's CPI is 6%. The 4% rule is calibrated to 3% US inflation.
+India-adjusted rate = 3.3%. This is non-negotiable.
+
+---
+
+### take_home.py  — New Tax Regime FY2025-26
+
+```
+Step 1: annual_gross = monthly_ctc × 12
+Step 2: monthly_basic = monthly_ctc × 0.40
+Step 3: employee_epf_monthly = min(monthly_basic × 0.12, 1800)
+Step 4: taxable_income = annual_gross − STANDARD_DEDUCTION − (employee_epf_monthly × 12)
+
+Step 5: Tax slabs (New Regime FY26):
+    0      – 3,00,000  :  0%
+    3,00,001 – 7,00,000  :  5%
+    7,00,001 – 10,00,000 : 10%
+    10,00,001 – 12,00,000 : 15%
+    12,00,001 – 15,00,000 : 20%
+    15,00,001+            : 30%
+
+Step 6: Section 87A rebate — CRITICAL:
+    If taxable_income ≤ 7,00,000 under new regime → tax = 0 (full rebate)
+    This applies to many 35–40 year old personas — get this right.
+
+Step 7: Surcharge (on tax amount, before cess):
+    50,00,001 – 1,00,00,000 : +10%
+    1,00,00,001 – 2,00,00,000: +15%
+    2,00,00,001 – 5,00,00,000: +25%
+    5,00,00,001+              : +37%
+    Note: marginal relief applies at each threshold — implement carefully.
+
+Step 8: Health & Education Cess = 4% on (tax + surcharge)
+
+Step 9: Professional Tax (deducted monthly):
+    Most states: ₹200/month  (₹2,400/year)
+    Rajasthan, HP, J&K, NE states, Goa: ₹0/month
+    Use settings.PROFESSIONAL_TAX_MAP or default ₹200 if city not in map
+
+Step 10: monthly_take_home = (annual_gross − annual_tax − annual_PT) / 12
+                             − employee_epf_monthly
+```
+
+---
+
+### epf.py  — Annual compounding (EPFO standard)
+
+```
+employer_epf_monthly = min(monthly_basic × 0.12, 1800)   # capped at ₹1,800
+employee_epf_monthly = min(monthly_basic × 0.12, 1800)   # capped at ₹1,800
+annual_contribution  = (employer_epf_monthly + employee_epf_monthly) × 12
+
+EPF corpus = annual_contribution × ((1 + EPF_RATE)^n − 1) / EPF_RATE
+             where n = years_to_retirement
+
+EPF compounds ANNUALLY — end-of-year annuity model (EPFO accounting).
+NEVER switch to monthly compounding — factually wrong for Indian EPF.
+
+Applies to: all job_types EXCEPT self_employed.
+For self_employed: epf_corpus = 0 (no employer, no mandatory EPF).
+```
+
+---
+
+### nps.py  — PSU employees post-2004 only
+
+```
+Applies ONLY to job_type == "psu_post2004"
+For all other job_types: return nps_corpus = 0
+
+government_contribution_monthly = monthly_basic × 0.14
+employee_contribution_monthly   = monthly_basic × 0.10
+total_monthly                   = government_contribution_monthly + employee_contribution_monthly
+annual_contribution             = total_monthly × 12
+
+blended_return = (0.75 × NPS_EQUITY_RATE) + (0.25 × NPS_DEBT_RATE)
+
+NPS corpus = FV of annual_contribution at blended_return for years_to_retirement
+
+At retirement:
+  lump_sum_withdrawal = nps_corpus × 0.60   # 60% allowed as lump-sum
+  annuity_corpus      = nps_corpus × 0.40   # 40% MANDATORY annuity — cannot withdraw
+
+Return lump_sum_withdrawal only (annuity_corpus generates monthly_pension separately).
+
+Scripts MUST say (verbatim):
+  "NPS mein 60% ek baar mein nikal sakte ho — baaki 40% monthly pension
+   ban jayega life bhar ke liye."
+
+Scripts MUST mention Section 80CCD(1B):
+  NPS contributions up to ₹50,000/year are deductible beyond the ₹1.5L 80C limit.
+  Frame as: "NPS ka ek aur faayda — ₹50,000 extra tax save kar sakte ho 80CCD(1B) ke
+   under, jo 80C ke ₹1.5 lakh se alag hai."
+```
+
+---
+
+### pension.py  — Old defined-benefit (pre-2004 PSU only)
+
+```
+Applies ONLY to job_type == "psu_pre2004"
+For all other job_types: return monthly_pension = 0
+
+monthly_pension = (years_of_service / 2) × last_drawn_basic / 100
+Cap at ₹62,500/month (current ceiling under 7th Pay Commission).
+years_of_service = years_experience + years_to_retirement
+last_drawn_basic = monthly_basic × (1 + INFLATION_RATE)^years_to_retirement
+```
+
+---
+
+### corpus.py
+
+```
+annual_expenses_at_retirement = monthly_expenses × 12
+                                 × (1 + INFLATION_RATE)^years_to_retirement
+
+target_corpus = annual_expenses_at_retirement / SAFE_WITHDRAWAL_RATE
+```
+
+---
+
+### savings_growth.py
+
+```
+grown_savings = existing_savings × (1 + EQUITY_MF_RATE)^years_to_retirement
+```
+
+---
+
+### sip.py
+
+```
+# Gap to fill after EPF + NPS lump-sum + grown savings
+corpus_gap = target_corpus − epf_corpus − nps_lump_sum − grown_savings
+
+# Monthly SIP via PMT formula (annuity-due at end of period)
+r = EQUITY_MF_RATE / 12
+n = years_to_retirement × 12
+monthly_sip = corpus_gap × r / ((1 + r)^n − 1)
+
+# instrument_split MUST carry BOTH % and ₹ amounts — scripts need the ₹ values
+instrument_split = {
+    "equity_mf_pct":        60,
+    "nps_pct":              25 if job_type == "psu_post2004" else 0,
+    "ppf_pct":              15 if job_type != "psu_post2004" else 15,
+    "equity_mf_monthly_inr": int(monthly_sip × 0.60),
+    "nps_monthly_inr":       int(monthly_sip × 0.25) if job_type == "psu_post2004" else 0,
+    "ppf_monthly_inr":       int(monthly_sip × 0.15),
+}
+# Adjust splits for self_employed (no EPF or NPS — heavier on equity/PPF).
+```
+
+---
+
+### validator.py  — SEBI Check 1
+
+```
+Sanity bounds — raise MathValidationError with descriptive message if violated:
+  monthly_sip      < settings.SIP_FLOOR (500) or > settings.SIP_CEILING (200000)
+  target_corpus    < 1_000_000 or > 500_000_000
+  monthly_take_home < 10_000 or > 1_000_000
+  years_to_retirement < 1 or > 40
+
+SEBI file check:
+  path = Path("assets/sebi/sebi_disclaimer_full.txt")
+  if not path.exists() or path.stat().st_size == 0:
+      raise DisclaimerMissingError("sebi_disclaimer_full.txt is missing or empty")
+  disclaimer_text = path.read_text(encoding="utf-8").strip()
+
+Inject into RetirementMath:
+  math["sebi_disclaimer"] = disclaimer_text
+
+Set DB flag:
+  record.sebi_check_1_passed = True
+  logger.info(f"[{content_id}] SEBI Check 1 PASSED")
+```
+
+---
+
+### Golden file tests  — NEVER skip
+
+`tests/fixtures/math_golden.json` — 10 verified persona+math pairs.
+`tests/test_golden.py` — must pass before any commit touching `calculate/`.
+
+If EPF_RATE changes:
+  1. Update .env
+  2. Run `scripts/recalculate_math.py --dry-run` to preview changes
+  3. Run `scripts/recalculate_math.py --confirm` to apply
+  4. **Manually** verify and update `math_golden.json` with new values
+  5. Run `pytest tests/test_golden.py -v` to confirm
+  Never auto-update the golden file — always human-verified.
+
+---
+
+## STAGE 3 — PERSONA GENERATION
+
+### content_id generation
+```python
+import uuid
+content_id: str = str(uuid.uuid4())
+# This is created in persona.py — first thing before any other field
+# Every subsequent module receives it as a parameter
+```
+
+### names.py
+200+ Indian first names + last names mapped to region:
+  North (Delhi, Lucknow, Chandigarh, Jaipur): Sharma, Gupta, Verma, Singh, Yadav…
+  South (Chennai, Hyderabad, Bengaluru, Kochi): Krishnan, Nair, Reddy, Rao, Pillai…
+  West (Mumbai, Pune, Ahmedabad, Indore): Mehta, Shah, Patel, Joshi, Desai…
+  East (Kolkata): Chatterjee, Banerjee, Das, Ghosh, Bose…
+  Bhopal/MP: Mishra, Dubey, Tiwari, Saxena…
+Match region to city. Names must be culturally plausible for the city.
+
+### persona.py  — parameter space
+
+```python
+JOB_TYPES = [
+    "private_tech",          # EPF yes, NPS no, pension no
+    "private_non_tech",      # EPF yes, NPS no, pension no
+    "psu_post2004",          # EPF yes, NPS yes, pension no
+    "psu_pre2004",           # EPF yes, NPS no, pension YES (old defined-benefit)
+    "doctor",                # EPF usually no (private hospital), NPS no
+    "lawyer",                # EPF no, NPS no, self-invested
+    "ca",                    # EPF no, NPS no, self-invested
+    "banker",                # EPF yes, NPS no (private banks)
+    "teacher_private",       # EPF yes, NPS no
+    "self_employed",         # EPF no, NPS no — heavier own SIP allocation
+]
+
+CITIES = [
+    "Mumbai", "Delhi", "Bengaluru", "Hyderabad", "Pune",
+    "Chennai", "Kolkata", "Ahmedabad", "Jaipur", "Lucknow",
+    "Chandigarh", "Bhopal", "Indore", "Kochi",
+]
+
+PARAMETER_RANGES = {
+    "age":               range(35, 51),           # 35–50
+    "monthly_ctc":       range(60_000, 5_00_001, 5_000),  # ₹60K–₹5L
+    "existing_savings":  range(0, 20_00_001, 50_000),     # ₹0–₹20L
+    "years_experience":  range(5, 26),            # 5–25
+}
+
+# monthly_expenses: sample 40–70% of computed take_home
+# Call calculate/take_home.py to get take_home first, then sample expense ratio
+```
+
+Raise `PersonaExhaustedError` when all unique combinations exhausted.
+Call `deduplicator.check(persona)` before returning — raises if duplicate.
+
+### deduplicator.py  — two-layer check
+
+```python
+def check(persona: PersonaData, db: Session) -> None:
+    h = persona_hash(persona)
+
+    # Layer 1: exact SHA-256 hash
+    if db.query(ContentRecord).filter_by(persona_hash=h).first():
+        raise PersonaExhaustedError(f"Exact duplicate: {h[:8]}")
+
+    # Layer 2: weighted similarity against recent 500 records
+    recent = db.query(ContentRecord).order_by(desc("created_at")).limit(500).all()
+    for r in recent:
+        prev = PersonaData(**json.loads(r.persona_json))
+        if similarity(persona, prev) >= settings.NEAR_DUPLICATE_THRESHOLD:
+            raise PersonaNearDuplicateError(
+                f"Near-duplicate (score ≥ {settings.NEAR_DUPLICATE_THRESHOLD})"
+            )
+```
+
+Never set threshold below 0.80 — would allow near-identical videos through.
+Default 0.85 in .env. Raise to 0.90 if fires too aggressively.
+
+---
+
+## STAGE 4 — SCRIPT WRITING
+
+### scriptwriter.py
+
+Model: **claude-sonnet-4-6** — NEVER claude-haiku-* or any other model.
+Wrong rupee figures in a retirement video damage channel trust permanently.
+The cost difference (~₹8–12 vs ₹1 for Haiku) is trivially justified.
+
+```python
+SYSTEM_PROMPT = """
+You are a Hinglish financial storyteller creating a retirement planning script
+for an Indian YouTube channel. Your audience is a {age}-year-old {job_type}
+earning ₹{monthly_ctc_formatted} per month in {city}.
+
+Script requirements:
+1. Language: Hinglish — natural mix of Hindi and English as spoken in India.
+   Do NOT write in pure Hindi or pure English.
+2. Length: 1200–1800 words exactly.
+3. Structure:
+   a) Hook (first 50 words): curiosity-triggering question or surprising number
+   b) Persona intro: who is this person, relatable details
+   c) Math reveal: target corpus, take-home, EPF projection — use EXACT figures
+   d) SIP breakdown: monthly SIP in ₹, per instrument in ₹ amounts
+   e) EPF + NPS section: include NPS 60/40 rule and 80CCD(1B) benefit
+   f) Actionable 3-step close
+   g) SEBI disclaimer: reproduce VERBATIM — "{sebi_disclaimer}"
+4. Numbers: always as ₹ with commas (₹18,840), spoken for voiceover.
+5. Tone: knowledgeable friend, not a formal lecture.
+
+RetirementMath JSON: {math_json}
+"""
+
+# max_tokens MUST be at least 2500 — lower values cause truncation
+# which silently drops the SEBI disclaimer → DisclaimerMissingError
+response = anthropic_client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=2500,
+    messages=[{"role": "user", "content": SYSTEM_PROMPT.format(...)}]
+)
+
+# Log FULL prompt to logs/write.log for SEBI audit trail
+logger.debug(f"[{content_id}] SYSTEM_PROMPT sent:\n{SYSTEM_PROMPT}")
+```
+
+On length or hook failure: 1 auto-regeneration (counts as 1 attempt).
+On `DisclaimerMissingError`: NEVER auto-retry. Log and halt.
+
+---
+
+### script_validator.py  — SEBI Check 2
+
+```python
+def validate(script: str, math: RetirementMath, record: ContentRecord) -> None:
+
+    # 1. Word count
+    wc = len(script.split())
+    if not (1200 <= wc <= 1800):
+        record.regeneration_count += 1
+        raise OutputValidationError(f"Word count {wc} outside 1200–1800")
+
+    # 2. SEBI phrase — verbatim match
+    if settings.SEBI_DISCLAIMER_PHRASE not in script:
+        raise DisclaimerMissingError(
+            f"[{content_id}] SEBI phrase not found in script. "
+            "Check logs/write.log for the full prompt."
+        )   # NEVER auto-retry this error
+
+    # 3. Number accuracy — every ₹ figure in script must match math JSON
+    for field, value in [
+        (math["monthly_sip"], "monthly SIP"),
+        (math["target_corpus"], "target corpus"),
+        (math["monthly_take_home"], "take-home"),
+    ]:
+        formatted = format_inr(field)
+        if formatted not in script:
+            raise NumberAccuracyError(
+                f"[{content_id}] {value} {formatted} not found in script"
+            )
+
+    # 4. Set check 2 flag
+    record.sebi_check_2_passed = True
+    logger.info(f"[{content_id}] SEBI Check 2 PASSED")
+```
+
+---
+
+### hook_validator.py
+
+```python
+# First 50 words must contain at least one curiosity trigger
+first_50 = " ".join(script.split()[:50])
+triggers = ["crore", "lakh", "?", "sochte ho", "pata hai", "real baat"]
+if not any(t in first_50.lower() for t in triggers):
+    record.regeneration_count += 1
+    raise OutputValidationError("Hook lacks curiosity trigger in first 50 words")
+```
+
+---
+
+### shorts_writer.py  — only after APPROVED
+
+```python
+# CALLED ONLY when record.status == ContentStatus.APPROVED
+# NEVER from an unapproved record
+
+def write_shorts_script(content_id: str, long_form_script: str,
+                        math: RetirementMath) -> str:
+    # Validate short disclaimer file before generation
+    short_path = Path("assets/sebi/sebi_disclaimer_short.txt")
+    if not short_path.exists() or short_path.stat().st_size == 0:
+        raise DisclaimerMissingError("sebi_disclaimer_short.txt missing or empty")
+    short_disclaimer = short_path.read_text().strip()
+
+    # Generate via claude-sonnet-4-6 — same model as long-form
+    # Target: 130–145 words
+    # Must contain key figures consistent with long-form
+    # Must end with short_disclaimer (verbatim)
+
+    wc = len(shorts_script.split())
+    if wc > 145:
+        raise OutputValidationError(f"Shorts script {wc} words — max 145")
+    return shorts_script
+```
+
+---
+
+### title_generator.py
+
+SEO formula: key ₹ number + age within first 40 characters.
+```
+"₹4.2 Cr Chahiye? 38 Saal Ke Engineer Ka Plan"
+"35 Saal, ₹90K CTC — Retire Kab Kar Sakta Hai?"
+```
+YouTube category: always `"27"` (Education) — never `"22"` (People & Blogs).
+Education earns 2–3× higher CPM. Hardcode `"27"` in formatter.py.
+
+---
+
+## STAGE 5 — HUMAN REVIEW DASHBOARD
+
+### CRITICAL: actions.py vs dashboard.py separation
+
+All business logic lives in `pipeline/review/actions.py`.
+`dashboard.py` is a thin Streamlit UI that calls `actions.py` functions.
+NEVER add logic to `dashboard.py`. This separation enables full pytest coverage.
+
+### actions.py
+
+```python
+def approve(content_id: str, db: Session) -> ContentRecord:
+    record = _get_or_raise(content_id, db)
+    record.status = ContentStatus.APPROVED
+    logger.info(f"[{content_id}] APPROVED by human reviewer")
+    return record
+
+def reject_regenerate(content_id: str, reason: str, db: Session) -> ContentRecord:
+    record = _get_or_raise(content_id, db)
+    record.regeneration_count += 1
+    record.reject_reason = reason
+    if record.regeneration_count >= 3:
+        record.status = ContentStatus.FAILED
+        logger.warning(f"[{content_id}] FAILED after 3 rejections")
+    else:
+        record.status = ContentStatus.REJECTED_REVIEW
+        logger.info(f"[{content_id}] REJECTED ({record.regeneration_count}/3): {reason}")
+    return record
+
+def get_pending_records(db: Session) -> list[ContentRecord]:
+    return (db.query(ContentRecord)
+              .filter_by(status=ContentStatus.PENDING_REVIEW)
+              .order_by(ContentRecord.created_at)
+              .all())
+```
+
+### dashboard.py
+
+Streamlit, local only — never deployed, never exposed publicly.
+```
+python main.py --dashboard  →  http://localhost:8501
+```
+
+Per-record display:
+  - Persona card (name, age, city, job, CTC, savings)
+  - Math table (take-home, EPF, corpus, SIP, instrument split)
+  - Full script with word count
+  - SEBI badge: green ✓ if both flags True, red ✗ otherwise
+  - Regeneration counter (N/3)
+
+Actions:
+  - Approve → calls `actions.approve()`
+  - Edit + Approve → text area for edit → calls `actions.approve()`
+  - Reject + Regenerate → text input for reason → calls `actions.reject_regenerate()`
+
+After 3 rejections: record shows FAILED, next run_cycle() generates new persona.
+Human review is MANDATORY. No config flag to skip it. No exceptions.
+
+---
+
+## STAGE 6 — MEDIA PRODUCTION
+
+### tts.py  (ElevenLabs — long-form voiceover)
+
+```python
+voice_settings = VoiceSettings(stability=0.65, style=0.10)
+# stability=0.65: consistent delivery for financial narration
+# style=0.10: minimal style exaggeration — clear, professional
+
+audio = client.generate(
+    text=script,
+    voice=settings.ELEVENLABS_VOICE_ID,
+    voice_settings=voice_settings,
+    model="eleven_multilingual_v2",   # supports Hinglish
+)
+audio_path.write_bytes(audio)
+
+# Validate — ElevenLabs occasionally returns HTTP 200 with empty body
+if audio_path.stat().st_size < 50_000:
+    raise TTSError(f"[{content_id}] Audio file < 50KB — likely empty response")
+```
+
+### tts_shorts.py  (ElevenLabs — Shorts voiceover)
+
+Identical voice settings: stability=0.65, style=0.10, same voice ID.
+Same empty-body check: st_size > 50_000.
+Separate file, separate module — NEVER reuse the long-form audio for Shorts.
+
+---
+
+### charts.py  — MANDATORY IMPORT ORDER
+
+```python
+import matplotlib          # MUST be absolute line 1 of this file
+matplotlib.use("Agg")      # MUST be line 2 — before ANY pyplot import
+import matplotlib.pyplot as plt   # line 3
+
+# Wrong order → headless server has no display → solid black PNG with no error
+# This is a silent failure — always verify chart output with chart_validator.py
+
+# Output spec:
+fig, ax = plt.subplots(figsize=(10.8, 5.4))   # → 1080×540 at 100 DPI
+# Bar chart: years on X-axis, cumulative corpus components stacked
+# Save: plt.savefig(str(chart_path), dpi=100, bbox_inches="tight")
+```
+
+### chart_validator.py
+
+```python
+from PIL import Image
+img = Image.open(chart_path)
+assert img.size == (1080, 540), f"Wrong dimensions: {img.size}"
+assert chart_path.stat().st_size > 10_000, "Chart file too small"
+arr = np.array(img)
+assert arr.std() > 5, "Chart appears blank (all same colour)"
+```
+
+---
+
+### overlays.py  — Whisper word timestamps → OverlaySpec
+
+Key rule: ElevenLabs speaks words, Whisper transcribes words.
+Use context phrases — NOT digit strings — for matching.
+
+```python
+# WRONG — will never match anything:
+# phrase = "31400"
+
+# RIGHT — matches Whisper output:
+# phrase = "thirty-one thousand four hundred"
+
+from core.utils import words_to_inr_phrase
+from difflib import SequenceMatcher
+
+def match_phrase(transcript_words: list[str], target_phrase: str) -> tuple[float, float] | None:
+    # Slide a window over transcript words
+    # SequenceMatcher(None, window_text, target_phrase).ratio() >= 0.70 → match
+    # Return (start_timestamp, end_timestamp) of matched window
+```
+
+Build overlay list from RetirementMath values:
+  target_corpus, monthly_sip, monthly_take_home, epf_corpus,
+  each instrument_split INR value.
+
+---
+
+### title_card.py  — 1080×960 PNG  (top video panel)
+
+```python
+# Output: 1080 wide × 960 tall — top half of the 1080×1920 video
+# Content: channel name, persona name, headline stat, city/age
+# Font: NotoSans-Bold.ttf for headlines, NotoSans-Regular.ttf for body
+# Background: dark gradient (matches channel branding)
+
+img = Image.new("RGB", (1080, 960), color=(15, 15, 30))
+```
+
+**NEVER** confuse with thumbnail — different dimensions, different purpose.
+title_card feeds into composer.py. thumbnail feeds to YouTube separately.
+
+### thumbnail.py  — 1280×720 JPG  (YouTube click preview)
+
+```python
+# Output: 1280 wide × 720 tall — YouTube thumbnail only
+# Content: large ₹ figure, persona age, curiosity hook text
+# High contrast — must be readable at 120px width (YouTube search results)
+
+img = Image.new("RGB", (1280, 720), color=(20, 20, 50))
+img.save(str(thumbnail_path), "JPEG", quality=95)
+```
+
+**NEVER** substitute title_card.py output for thumbnail.py output.
+
+---
+
+### composer.py  (FFmpeg — long-form 1080×1920 MP4)
+
+```python
+# 3-section portrait layout (top to bottom):
+#   title_card : 1080×960  (top)
+#   chart      : 1080×540  (middle)
+#   lower_third: 1080×420  (bottom — logo + channel name)
+
+# Voiceover audio mixed with background music (if assets/music/ has files)
+# If music folder empty: voiceover-only audio, log WARNING
+
+# Codec — REQUIRED for Instagram compatibility:
+# -c:v libx264 -preset medium -crf 23
+# -c:a aac -ar 44100 -b:a 128k
+
+# Overlay specs from overlays.py: burn text onto chart section at timestamps
+# Use FFmpeg drawtext filter with appropriate timestamp sync
+
+ffmpeg_cmd = [
+    "ffmpeg", "-y",
+    "-loop", "1", "-i", str(title_card_path),   # top panel
+    "-i", str(chart_path),                        # middle
+    "-i", str(voiceover_path),                    # audio
+    "-filter_complex", build_filter_complex(overlays),
+    "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+    "-c:a", "aac", "-ar", "44100", "-b:a", "128k",
+    "-t", str(audio_duration),
+    str(output_path),
+]
+```
+
+### shorts_composer.py  (FFmpeg — ≤58s 1080×1920 MP4)
+
+```python
+# Duration enforcement — hard limit
+if audio_duration > 58:
+    # Apply 5% speed-up
+    ffmpeg_atempo_cmd = ["ffmpeg", "-y", "-i", str(audio), "-filter:a", "atempo=1.05", ...]
+    new_duration = check_duration(sped_up_audio)
+    if new_duration > 58:
+        raise OutputValidationError(
+            f"[{content_id}] Shorts audio {new_duration:.1f}s after atempo — "
+            "shorten script to 130–145 words"
+        )
+
+# Codec: -c:v libx264 -c:a aac (VP9/HEVC causes Instagram indefinite processing hang)
+```
+
+### branding.py
+
+```python
+# FFmpeg concat: intro.mp4 (5s) + main_video + outro.mp4 (30s)
+# If any branding file missing:
+for f in [intro_path, outro_path]:
+    if not f.exists():
+        logger.warning(f"[{content_id}] Branding file {f.name} missing — skipping")
+        return main_video_path   # pipeline continues without branding
+```
+
+---
+
+## STAGE 7 — PUBLISH
+
+### formatter.py  — YouTube description
+
+Description structure (order is MANDATORY — do not rearrange):
+```
+{2–3 sentence video summary}
+
+📌 Chapters:
+00:00 Introduction
+{chapter timestamps}
+
+⚠️ Disclosure:
+Some links above are affiliate links. I may earn a small commission if you sign
+up. This does not affect my recommendations.
+
+🔗 Links:
+{affiliate_link_groww}
+{affiliate_link_zerodha}
+{affiliate_link_indmoney}
+
+⚠️ Disclaimer:
+Mutual fund investments are subject to market risks. Read all scheme related
+documents carefully before investing. Past performance is not indicative of
+future results. This video is for educational purposes only and does not
+constitute investment advice. Please consult a SEBI-registered financial
+advisor before making any investment decisions.
+```
+
+ASCI disclosure is legally required under Indian advertising guidelines.
+It MUST appear BEFORE affiliate links. NEVER remove or reorder it.
+YouTube category: `"27"` (Education) — hardcoded, never a variable.
+
+---
+
+### uploader.py  — SEBI gate + upload
+
+```python
+def upload(content_id: str, record: ContentRecord, ...) -> None:
+
+    # MANDATORY gate — never bypass, never comment out
+    if not record.sebi_check_1_passed or not record.sebi_check_2_passed:
+        raise UploadError(
+            f"[{content_id}] SEBI gate failed: "
+            f"check_1={record.sebi_check_1_passed}, "
+            f"check_2={record.sebi_check_2_passed}. Refusing upload."
+        )
+
+    # YouTube long-form
+    # OAuth2 token from youtube_token.json (expires every 7 days)
+    # On invalid_grant: raise UploadError with instructions to refresh token
+    youtube_upload(video_path, metadata)
+
+    # Instagram Reels (Shorts)
+    # Step 1: Upload to S3, get public URL (Instagram needs public URL)
+    s3_url = s3_upload_and_presign(shorts_path)
+    # Step 2: Create media container via Instagram Graph API
+    container_id = ig_create_container(s3_url)
+    # Step 3: Poll until FINISHED — every 10s, max 300s
+    for _ in range(30):
+        time.sleep(10)
+        status = ig_check_status(container_id)
+        if status == "FINISHED":
+            break
+        if status == "ERROR":
+            raise UploadError(f"[{content_id}] Instagram container errored")
+    else:
+        raise UploadError(f"[{content_id}] Instagram processing timeout after 300s")
+    # Step 4: Publish
+    ig_publish(container_id)
+```
+
+YouTube API notes:
+  - Use Instagram Graph API — NOT Basic Display API
+  - H.264 + AAC required — VP9 or HEVC causes indefinite PROCESSING state
+  - Token refresh: re-run OAuth2 flow from setup instructions
+
+### retry.py
+
+```python
+import functools, time, random
+
+def with_retry(max_attempts: int = 4):
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_attempts):
+                try:
+                    return fn(*args, **kwargs)
+                except DisclaimerMissingError:
+                    raise   # NEVER retry this — propagate immediately
+                except RetireBotError as e:
+                    if attempt == max_attempts - 1:
+                        raise
+                    wait = (2 ** attempt) * (0.8 + random.random() * 0.4)  # ±20% jitter
+                    logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {wait:.1f}s")
+                    time.sleep(wait)
+        return wrapper
+    return decorator
+```
+
+---
+
+## STAGE 8 — FEEDBACK & STORAGE
+
+### feedback/analytics.py
+
+```python
+# YouTube Analytics API — runs 24h after upload (data lag)
+# CORRECT metric:
+ytd.reports().query(metrics="impressionsClickThroughRate,views,averageViewPercentage")
+# DEPRECATED — NEVER use this:
+# metrics="annotationClickThroughRate"   ← returns empty data silently
+
+# Sync to ContentRecord:
+record.yt_views          = views
+record.yt_ctr            = impressionsClickThroughRate
+record.yt_avg_watch_pct  = averageViewPercentage
+```
+
+### storage/s3.py
+
+```python
+# Bucket: retirebot-outputs in ap-south-1
+# Policy: public-read (required for Instagram Graph API)
+# Use boto3 — always catch ClientError
+
+def upload_video(local_path: Path, content_id: str) -> str:
+    key = f"videos/{content_id}/{local_path.name}"
+    s3_client.upload_file(str(local_path), settings.AWS_S3_BUCKET, key)
+    url = s3_client.generate_presigned_url("get_object",
+              Params={"Bucket": settings.AWS_S3_BUCKET, "Key": key},
+              ExpiresIn=3600)
+    return url
+```
+
+### storage/cleanup.py
+
+```python
+# Called in orchestrator.py finally block after successful UPLOADED transition
+def cleanup_temp(content_id: str) -> None:
+    temp_dir = settings.TEMP_DIR
+    for f in temp_dir.glob(f"{content_id}_*"):
+        f.unlink(missing_ok=True)
+        logger.info(f"[{content_id}] Cleaned up {f.name}")
+```
+
+### storage/db_logger.py
+
+```python
+# Structured event log to RunLog table
+# Called at start and end of each run_cycle() / run_pending()
+
+def start_run(run_type: str, db: Session) -> RunLog:
+    run = RunLog(
+        run_id=str(uuid.uuid4()),
+        run_type=run_type,
+        started_at=datetime.utcnow(),
+        status="running",
+        content_ids=[],
+    )
+    db.add(run); db.commit()
+    return run
+
+def finish_run(run: RunLog, content_ids: list[str],
+               status: str, error: str | None, db: Session) -> None:
+    run.finished_at = datetime.utcnow()
+    run.status = status
+    run.content_ids = content_ids
+    run.error = error
+    db.commit()
+```
+
+### monitoring/sentry.py
+
+```python
+import sentry_sdk
+
+def init_sentry() -> None:
+    if settings.APP_ENV == "production":
+        sentry_sdk.init(dsn=settings.SENTRY_DSN, traces_sample_rate=0.1)
+
+def capture(exc: Exception, content_id: str | None = None) -> None:
+    with sentry_sdk.push_scope() as scope:
+        if content_id:
+            scope.set_tag("content_id", content_id)
+        sentry_sdk.capture_exception(exc)
+```
+
+### monitoring/metrics.py
+
+Simple in-process counters (no external service required):
+```python
+COUNTERS: dict[str, int] = {
+    "personas_generated": 0,
+    "scripts_generated": 0,
+    "sebi_check1_pass": 0,
+    "sebi_check2_pass": 0,
+    "uploads_ok": 0,
+    "uploads_failed": 0,
+    "near_duplicates_rejected": 0,
+}
+
+def increment(key: str) -> None:
+    COUNTERS[key] = COUNTERS.get(key, 0) + 1
+
+def report() -> dict[str, int]:
+    return dict(COUNTERS)
+```
+
+### monitoring/health.py
+
+```python
+# Called by cron or manually to verify dependencies are reachable
+def check_health() -> dict[str, str]:
+    results = {}
+    # Check DB
+    try:
+        with get_db() as db: db.execute("SELECT 1")
+        results["db"] = "ok"
+    except Exception as e:
+        results["db"] = f"error: {e}"
+    # Check S3
+    try:
+        s3_client.head_bucket(Bucket=settings.AWS_S3_BUCKET)
+        results["s3"] = "ok"
+    except Exception as e:
+        results["s3"] = f"error: {e}"
+    return results
+```
+
+---
+
+## STAGE 9 — ORCHESTRATOR & CLI
+
+### orchestrator.py — full state machine
+
+```python
+def run_cycle(dry_run: bool = False) -> None:
+    """
+    Runs at 10:00 IST and 20:00 IST.
+    Generates personas + scripts. Does NOT produce media or upload.
+    """
+    with get_db() as db:
+        run = db_logger.start_run("cycle", db)
+        processed = []
+        try:
+            for _ in range(settings.CYCLE_BATCH_SIZE):   # default 2 per cycle
+                try:
+                    # 1. Generate persona
+                    persona = persona_module.generate(db)         # → PERSONA_GENERATED
+                    cid = persona["content_id"]
+                    processed.append(cid)
+                    # 2. Math
+                    math = run_calculate(persona, db)             # → MATH_CALCULATED
+                    # 3. Validate math
+                    validated = validator.validate(math, db)      # → MATH_VALIDATED
+                    # 4. Script
+                    script = scriptwriter.write(persona, math, db) # → SCRIPT_GENERATED
+                    # 5. Validate script
+                    script_validator.validate(script, math, db)   # → SCRIPT_VALIDATED
+                    # 6. Queue for review
+                    set_status(cid, PENDING_REVIEW, db)
+                    logger.info(f"[{cid}] Queued for human review")
+                except (PersonaExhaustedError, PersonaNearDuplicateError) as e:
+                    logger.warning(f"Persona skipped: {e}")
+                    continue
+                except DisclaimerMissingError:
+                    logger.error("DisclaimerMissingError — check write.log. No auto-retry.")
+                    set_status(cid, FAILED, db)
+                except RetireBotError as e:
+                    logger.error(f"[{cid}] Stage failed: {e}")
+                    set_status(cid, FAILED, db)
+            db_logger.finish_run(run, processed, "ok", None, db)
+        except Exception as e:
+            db_logger.finish_run(run, processed, "failed", str(e), db)
+            monitoring.capture(e)
+            raise
+
+
+def run_pending(dry_run: bool = False) -> None:
+    """
+    Runs at 14:00 IST and 21:00 IST.
+    Produces + publishes APPROVED records. Never runs on unapproved content.
+    """
+    with get_db() as db:
+        approved = actions.get_approved_records(db)
+        for record in approved:
+            cid = record.content_id
+            try:
+                persona = PersonaData(**json.loads(record.persona_json))
+                math    = RetirementMath(**json.loads(record.math_json))
+                # 1. Shorts script (only after approval)
+                shorts = shorts_writer.write(cid, record.script_text, math) # → SHORTS_WRITTEN
+                # 2. Produce all media
+                produce_all(cid, record, persona, math, shorts)             # → PRODUCED
+                # 3. Upload
+                if not dry_run:
+                    uploader.upload(cid, record, ...)                       # → UPLOADED
+                else:
+                    logger.info(f"[{cid}] dry_run=True — skipping upload")
+                # 4. Cleanup
+                cleanup.cleanup_temp(cid)
+            except RetireBotError as e:
+                logger.error(f"[{cid}] Production failed: {e}")
+                set_status(cid, FAILED, db)
+                monitoring.capture(e, cid)
+```
+
+Status machine — enforce strictly, no shortcutting:
+```
+PERSONA_GENERATED → MATH_CALCULATED → MATH_VALIDATED →
+SCRIPT_GENERATED  → SCRIPT_VALIDATED → PENDING_REVIEW →
+APPROVED → SHORTS_WRITTEN → PRODUCED → UPLOADED
+         ↘ REJECTED_REVIEW (max 3 times, then → FAILED)
+Any stage ↘ FAILED  (unrecoverable — check logs for content_id)
+```
+
+### Scheduling — cron setup (IST = UTC+5:30)
+
+Add to crontab (`crontab -e`) on the machine running the pipeline:
+```cron
+# run_cycle — 10:00 IST (04:30 UTC) and 20:00 IST (14:30 UTC)
+30 4  * * *  cd /path/to/NiveshNarrator && APP_ENV=production python main.py --run-cycle >> logs/cron.log 2>&1
+30 14 * * *  cd /path/to/NiveshNarrator && APP_ENV=production python main.py --run-cycle >> logs/cron.log 2>&1
+
+# run_pending — 14:00 IST (08:30 UTC) and 21:00 IST (15:30 UTC)
+30 8  * * *  cd /path/to/NiveshNarrator && APP_ENV=production python main.py --run-pending >> logs/cron.log 2>&1
+30 15 * * *  cd /path/to/NiveshNarrator && APP_ENV=production python main.py --run-pending >> logs/cron.log 2>&1
+```
+
+### main.py — CLI entry point
+
+```python
+import argparse
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-cycle",   action="store_true")
+    parser.add_argument("--run-pending", action="store_true")
+    parser.add_argument("--dashboard",   action="store_true")
+    parser.add_argument("--content-id",  type=str)
+    parser.add_argument("--stage",       type=str,
+                        choices=["calculate", "write", "produce", "publish"])
+    parser.add_argument("--dry-run",     action="store_true")
+
+    args = parser.parse_args()
+
+    if args.run_cycle:
+        orchestrator.run_cycle(dry_run=args.dry_run)
+    elif args.run_pending:
+        orchestrator.run_pending(dry_run=args.dry_run)
+    elif args.dashboard:
+        import subprocess
+        subprocess.run(["streamlit", "run", "pipeline/review/dashboard.py"])
+    elif args.content_id and args.stage:
+        run_single_stage(args.content_id, args.stage, dry_run=args.dry_run)
+    elif args.content_id and args.dry_run:
+        run_single_end_to_end(args.content_id, dry_run=True)
+```
+
+APP_ENV behaviour:
+  `development` — DEBUG logging, dry_run=True by default, SQLite
+  `production`  — INFO logging, dry_run=False by default, Postgres or SQLite
+
+**Always use `--dry-run` when testing. There is no staging YouTube channel.**
+
+---
+
+## MAINTENANCE SCRIPTS
+
+### scripts/recalculate_math.py
+
+```
+Usage:
+  python scripts/recalculate_math.py --dry-run   # preview impact, no DB changes
+  python scripts/recalculate_math.py --confirm    # apply recalculation to queued records
+
+Targets: all records in status IN (MATH_CALCULATED, MATH_VALIDATED,
+         SCRIPT_GENERATED, SCRIPT_VALIDATED, PENDING_REVIEW)
+         i.e. not yet APPROVED — don't touch approved or uploaded records.
+
+After rate change procedure:
+  1. Update .env
+  2. --dry-run → review output
+  3. --confirm → recalculate
+  4. Manually update tests/fixtures/math_golden.json
+  5. pytest tests/test_golden.py -v
+```
+
+### scripts/export_analytics.py
+
+```
+Usage:
+  python scripts/export_analytics.py
+
+Output: analytics_export_{date}.csv with columns:
+  content_id, persona_age, persona_city, persona_job_type, persona_ctc,
+  yt_views, yt_ctr, yt_avg_watch_pct, created_at, uploaded_at
+
+Use for: identifying top-performing persona combinations.
+Sort by yt_avg_watch_pct DESC — top 10 show what resonates.
+Review after 50+ videos, then adjust persona sampling weights manually.
+```
+
+---
+
+## SEBI COMPLIANCE — TWO INDEPENDENT CHECKPOINTS
+
+**Check 1** — `pipeline/calculate/validator.py`:
+- Reads `assets/sebi/sebi_disclaimer_full.txt`
+- Raises `DisclaimerMissingError` if file missing or empty
+- Injects disclaimer into `RetirementMath.sebi_disclaimer`
+- Sets `ContentRecord.sebi_check_1_passed = True`
+
+**Check 2** — `pipeline/write/script_validator.py`:
+- Confirms `settings.SEBI_DISCLAIMER_PHRASE` appears verbatim in script
+- Raises `DisclaimerMissingError` — NEVER auto-retried
+- Sets `ContentRecord.sebi_check_2_passed = True`
+
+**Upload gate** — `pipeline/publish/uploader.py`:
+- Both flags MUST be True — raises `UploadError` if either is False
+- This gate can NEVER be bypassed, commented out, or feature-flagged
+
+**Verbatim disclaimer texts:**
+
+```
+# assets/sebi/sebi_disclaimer_full.txt
+Mutual fund investments are subject to market risks. Read all scheme related
+documents carefully before investing. Past performance is not indicative of
+future results. This video is for educational purposes only and does not
+constitute investment advice. Please consult a SEBI-registered financial
+advisor before making any investment decisions.
+
+# assets/sebi/sebi_disclaimer_short.txt (≤35 words — for Shorts)
+Mutual fund investments are subject to market risks. This is for educational
+purposes only. Consult a SEBI-registered financial advisor before investing.
+```
+
+`settings.SEBI_DISCLAIMER_PHRASE` = first 20 words of the full disclaimer:
+`"Mutual fund investments are subject to market risks. Read all scheme related documents carefully"`
+
+---
+
+## TESTING REQUIREMENTS
+
+Run in this order — do not proceed to next stage until green:
+
+```bash
+pytest tests/test_core.py -v                     # after Stage 1
+pytest tests/test_golden.py -v                   # after Stage 2 — math regression
+pytest tests/test_math_validator.py -v           # after Stage 2 — bounds + SEBI
+pytest tests/test_script_validator.py -v         # after Stage 4 — compliance
+pytest tests/ -v --tb=short                      # before any PR or deploy
+```
+
+conftest.py fixtures:
+```python
+@pytest.fixture
+def mock_settings():
+    # Settings with all financial rates, test DB, test temp dir
+
+@pytest.fixture
+def sample_persona():
+    # Valid PersonaData: age=42, city="Mumbai", job_type="private_tech",
+    #                    monthly_ctc=150000, existing_savings=500000,
+    #                    years_experience=15
+```
+
+`tests/fixtures/math_golden.json` — NEVER delete, NEVER auto-modify.
+Contains 10 persona+math pairs verified by domain expert (Manas).
+Updating requires: run calculation → manual verify → update file → pytest green.
+
+---
+
+## COMMON FAILURES AND EXACT FIXES
+
+| Failure | Cause | Fix |
+|---------|-------|-----|
+| ElevenLabs file < 50KB | Empty body despite HTTP 200 | Retry immediately; check elevenlabs.io/status |
+| Chart is solid black PNG | `matplotlib.use("Agg")` not on line 1 | Move to absolute first line before all other imports |
+| Shorts video is 62 seconds | Voiceover ran long | Shorten script to 130–145 words; add assertion |
+| YouTube `invalid_grant` | OAuth token expired (7 days) | Re-run OAuth2 flow; refresh youtube_token.json |
+| Instagram stuck in PROCESSING | Wrong codec (VP9 or HEVC) | Confirm `-c:v libx264 -c:a aac` in shorts_composer.py |
+| `DisclaimerMissingError` | Claude omitted SEBI disclaimer | Check logs/write.log for full prompt; fix system prompt; manually regenerate |
+| `PersonaExhaustedError` | All param combinations used | Expected — start new series (salary, tax, home loan) |
+| `PersonaNearDuplicateError` too aggressive | Threshold too low | Raise `NEAR_DUPLICATE_THRESHOLD` to 0.90 in .env |
+| Numbers wrong in script | `NumberAccuracyError` not firing | Check `script_validator.py` — verify `format_inr()` output matches script |
+| Section 87A rebate not applied | Missing rebate logic in take_home.py | Add: if taxable_income ≤ 700000 → set tax = 0 |
+| Overlays not appearing | Digit string matching attempted | Switch to `words_to_inr_phrase()` + SequenceMatcher ≥ 0.70 |
+
+---
+
+## HARD LIMITS — PERMANENT, NON-NEGOTIABLE CONSTRAINTS
+
+1.  **SAFE_WITHDRAWAL_RATE = 0.033** — NEVER 0.04 (India CPI is 6%, not 3%)
+2.  **EPF compounds ANNUALLY** — NEVER monthly (EPFO end-of-year accounting)
+3.  **Human review is MANDATORY** — no skip flag, no override, no exception
+4.  **Claude Sonnet only** for scripts — NEVER Haiku or any other model
+5.  **`DisclaimerMissingError` NEVER auto-retried** — investigate system prompt
+6.  **Both SEBI flags must be True before upload** — UploadError if either False
+7.  **ASCI affiliate disclosure NEVER removed** — legally required under Indian law
+8.  **`pipeline/calculate/` NEVER makes external calls** — pure Python only
+9.  **`annotationClickThroughRate` NEVER used** — deprecated, returns empty data
+10. **`title_card.py` → 1080×960 PNG** (video top panel) ≠ **`thumbnail.py` → 1280×720 JPG** (YouTube preview)
+11. **Business logic NEVER in `dashboard.py`** — always in `actions.py`
+12. **`matplotlib.use("Agg")` MUST be absolute line 1** — before any matplotlib import
+13. **EPF rate NEVER hardcoded** — always `settings.EPF_RATE` from `.env`
+14. **Shorts script generated ONLY after long-form APPROVED** — status gate enforced
+15. **Section 87A rebate MUST be applied** — if taxable_income ≤ ₹7L, tax = 0
+16. **`content_id` is UUIDv4** — generated in `persona.py`, prefix on every log line
+
+---
+
+## BUILD ORDER  (strict — each stage gates the next)
+
+```
+Stage 0 : Scaffold         → __init__.py everywhere, empty modules, no syntax errors
+                             logs/ created, assets/sebi/ files present
+Stage 1 : Core             → exceptions → logger → models → utils → config → database
+                             ✅ pytest tests/test_core.py GREEN
+Stage 2 : Math Engine      → take_home → corpus → epf → nps → savings → sip
+                             → pension → validator
+                             ✅ pytest tests/test_golden.py GREEN before continuing
+                             ✅ pytest tests/test_math_validator.py GREEN
+Stage 3 : Persona Gen      → names → deduplicator → persona
+Stage 4 : Script Writing   → scriptwriter → script_validator → hook_validator
+                             → shorts_writer → title_generator
+                             ✅ pytest tests/test_script_validator.py GREEN
+Stage 5 : Review Dashboard → actions.py (full logic + tests) → dashboard.py (UI)
+Stage 6 : Media Production → tts → tts_shorts → charts → chart_validator
+                             → overlays → title_card → thumbnail
+                             → composer → shorts_composer → branding
+Stage 7 : Publish          → formatter → uploader (with SEBI gate) → retry
+Stage 8 : Feedback/Storage → analytics → s3 → cleanup → db_logger
+                             → sentry → metrics → health
+Stage 9 : Orchestrator     → recalculate_math.py → export_analytics.py
+                             → orchestrator.py → main.py CLI
+Stage 10: Final            → ✅ pytest tests/ -v --tb=short ALL GREEN
+                             ✅ python main.py --run-cycle --dry-run PASSES
+                             ✅ Log ends with "dry_run=True — skipping upload"
+```
+
+---
+
+## ENVIRONMENT VARIABLES  (.env.example — committed, .env — gitignored)
+
+```bash
+# ── Anthropic ────────────────────────────────────────────────
+ANTHROPIC_API_KEY=
+
+# ── ElevenLabs ───────────────────────────────────────────────
+ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_ID=
+
+# ── OpenAI (Whisper timestamps) ──────────────────────────────
+OPENAI_API_KEY=
+
+# ── YouTube ──────────────────────────────────────────────────
+YOUTUBE_API_KEY=
+YOUTUBE_CHANNEL_ID=
+
+# ── AWS S3 ───────────────────────────────────────────────────
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_S3_BUCKET=retirebot-outputs
+AWS_REGION=ap-south-1
+
+# ── Instagram ────────────────────────────────────────────────
+INSTAGRAM_ACCESS_TOKEN=
+INSTAGRAM_BUSINESS_ACCOUNT_ID=
+
+# ── Monitoring ───────────────────────────────────────────────
+SENTRY_DSN=
+
+# ── Financial rates (update annually) ───────────────────────
+EPF_RATE=0.0825
+PPF_RATE=0.071
+NPS_EQUITY_RATE=0.12
+NPS_DEBT_RATE=0.075
+INFLATION_RATE=0.06
+SAFE_WITHDRAWAL_RATE=0.033
+EQUITY_MF_RATE=0.12
+STANDARD_DEDUCTION=75000
+RETIREMENT_AGE=60
+
+# ── Pipeline ─────────────────────────────────────────────────
+NEAR_DUPLICATE_THRESHOLD=0.85
+SEBI_DISCLAIMER_PHRASE=Mutual fund investments are subject to market risks. Read all scheme related documents carefully
+SIP_FLOOR=500
+SIP_CEILING=200000
+CYCLE_BATCH_SIZE=2
+
+# ── App ──────────────────────────────────────────────────────
+APP_ENV=development
+TEMP_DIR=/tmp/niveshnarrator
+DATABASE_URL=sqlite:///./niveshnarrator.db
+```
+
+---
+
+## MONTHLY MAINTENANCE CHECKLIST
+
+Financial accuracy:
+  ☐ Check EPFO website for EPF rate change
+  ☐ Check PPF rate (India Post / RBI site)
+  ☐ Confirm STANDARD_DEDUCTION is still ₹75,000 (budget may change it)
+  ☐ pytest tests/test_golden.py — must always pass
+
+Compliance:
+  ☐ Verify sebi_disclaimer_full.txt matches current SEBI guidelines
+  ☐ Test all affiliate links in .env — confirm they are live
+  ☐ Confirm ASCI disclosure appears BEFORE affiliate links in recent descriptions
+
+Platform credentials:
+  ☐ Refresh YouTube OAuth token if > 6 days since last refresh (expires at 7 days)
+  ☐ Check Instagram access token expiry (Meta tokens expire every 60 days)
+  ☐ Review Sentry dashboard for recurring errors
+
+Performance review:
+  ☐ python scripts/export_analytics.py → review CSV
+  ☐ Identify top 3 persona combos by yt_avg_watch_pct
+  ☐ Identify bottom 3 — avoid those next month
+  ☐ If yt_avg_watch_pct average < 30% → review hook quality and system prompt
